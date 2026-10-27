@@ -29,7 +29,7 @@
 <header class="bar"><div class="title">✿ Umi Cookies <div class="small">E-Katalog Pribadi</div></div>
   <div class="tools"><button class="btn primary hide" id="installBtn" type="button">Pasang Aplikasi</button><a class="btn" id="directBtn" href="#" target="_blank" rel="noopener noreferrer">Buka Langsung</a><a class="btn" id="adminBtn" href="#" target="_blank" rel="noopener noreferrer">⚙ Pengaturan</a></div>
 </header>
-<main id="frameArea"><iframe id="catalogFrame" title="E-Katalog Umi Cookies" loading="eager" referrerpolicy="strict-origin-when-cross-origin"></iframe></main>
+<main id="frameArea"><iframe id="catalogFrame" title="E-Katalog Umi Cookies" loading="eager" allow="web-share" referrerpolicy="strict-origin-when-cross-origin"></iframe></main>
 <section id="setup" class="setup hide"><h2>Hubungkan Apps Script terlebih dahulu</h2><p>Di file <code>github/index.html</code>, ganti teks <code>GANTI_DENGAN_URL_APPS_SCRIPT_EXEC</code> dengan URL Web App yang berakhiran <code>/exec</code>. Lalu unggah ulang file ini ke GitHub Pages.</p></section>
 <div id="status" class="hide">Jika galeri tidak tampil, gunakan <a id="directHelp" href="#" target="_blank" rel="noopener noreferrer">Buka Langsung</a>. Jaringan internet diperlukan untuk memuat foto.</div>
 <script>
@@ -39,7 +39,9 @@ const APP_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzT6ck5gYXM1-Mec
 const valid = /^https:\/\/script\.google\.com\/macros\/s\/[a-zA-Z0-9_-]+\/exec$/.test(APP_SCRIPT_URL);
 const $ = id => document.getElementById(id);
 if(valid){
-  $('catalogFrame').src=APP_SCRIPT_URL;
+  const chosen=new URLSearchParams(location.search).get('kue')||'';
+  const cakeId=/^[0-9a-fA-F-]{36}$/.test(chosen)?chosen:'';
+  $('catalogFrame').src=APP_SCRIPT_URL+(cakeId?'?kue='+encodeURIComponent(cakeId):'');
   $('directBtn').href=APP_SCRIPT_URL;
   $('directHelp').href=APP_SCRIPT_URL;
   $('adminBtn').href=APP_SCRIPT_URL+'?admin=1';
@@ -48,6 +50,32 @@ if(valid){
   $('frameArea').classList.add('hide');$('setup').classList.remove('hide');
   $('adminBtn').classList.add('hide');$('directBtn').classList.add('hide');
 }
+// V9: berbagi foto via sistem berbagi Android, di halaman PWA utama (bukan iframe Apps Script).
+function trustedCatalogOrigin(origin){
+  try{const host=new URL(origin).hostname;
+    return origin.startsWith('https://') && (host==='script.google.com'||host==='script.googleusercontent.com'||host.endsWith('.googleusercontent.com'));
+  }catch(_){return false;}
+}
+function replyToCatalog(event,req,status){
+  try{event.source.postMessage({source:'UMI_CATALOG_V9_ACK',requestId:req,status},event.origin);}catch(_){}
+}
+window.addEventListener('message',event=>{
+  const m=event.data||{};
+  if(!trustedCatalogOrigin(event.origin)||m.source!=='UMI_CATALOG_V9'||m.action!=='sharePhoto')return;
+  if(typeof m.requestId!=='string'||m.requestId.length>100||
+     typeof m.id!=='string'||!/^[0-9a-fA-F-]{36}$/.test(m.id)||
+     typeof m.src!=='string'||m.src.length>2600000||!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(m.src))return;
+  try{
+    const raw=atob(m.src.split(',')[1]);
+    const bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+    const file=new File([bytes],'umi-cookies-'+m.id+'.jpg',{type:'image/jpeg'});
+    if(!navigator.share||(navigator.canShare&&!navigator.canShare({files:[file]}))){replyToCatalog(event,m.requestId,'error');return;}
+    // Call synchronously within incoming message task to preserve transient user activation.
+    const share=navigator.share({files:[file],title:String(m.title||'Foto Kue').slice(0,100),text:'Contoh kue dari Umi Cookies Jember'});
+    replyToCatalog(event,m.requestId,'started');
+    Promise.resolve(share).catch(err=>{if(err.name!=='AbortError')console.warn('Berbagi gambar gagal:',err)});
+  }catch(e){replyToCatalog(event,m.requestId,'error');console.warn('Menu berbagi tidak tersedia',e);}
+});
 window.addEventListener('online',()=>{$('status').textContent='Koneksi pulih. Muat ulang jika foto belum terlihat.';});
 window.addEventListener('offline',()=>{$('status').textContent='Sedang offline. Foto tidak bisa dimuat sampai internet kembali.';});
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn));}
